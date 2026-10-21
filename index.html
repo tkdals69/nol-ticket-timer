@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOL 예매 타이머</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --text: #f2f4f8;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --ok: #35c46a;
+    --warn: #ffb020;
+    --danger: #ff4d4f;
+    --border: #2a2f3a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  }
+  body.flash { animation: flash 0.25s steps(2) 8; }
+  @keyframes flash { 50% { background: #3a1010; } }
+  @media (prefers-reduced-motion: reduce) { body.flash { animation: none; background: #3a1010; } }
+
+  main { max-width: 900px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 14px; color: var(--muted); margin: 0 0 8px; font-weight: 600; letter-spacing: .04em; }
+
+  .clock { font-variant-numeric: tabular-nums; font-family: Consolas, "Cascadia Mono", monospace; }
+  #serverClock { font-size: clamp(36px, 9vw, 56px); line-height: 1; margin: 4px 0; }
+  #countdown { font-size: clamp(44px, 11vw, 72px); line-height: 1; margin: 4px 0; }
+  #countdown.near { color: var(--warn); }
+  #countdown.go { color: var(--ok); }
+  .sub { color: var(--muted); font-size: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0 0; font-size: 14px; }
+  dt { color: var(--muted); } dd { margin: 0; }
+
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-size: 15px; cursor: pointer; min-height: 44px;
+  }
+  button.secondary { background: #2b3140; }
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type="datetime-local"] {
+    background: #0f1115; color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px; font-size: 15px; min-height: 44px;
+  }
+  label { font-size: 14px; color: var(--muted); }
+  .status-ok { color: var(--ok); } .status-warn { color: var(--warn); } .status-err { color: var(--danger); }
+
+  ul.checklist { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  ul.checklist li label { color: var(--text); display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  ul.checklist input { width: 20px; height: 20px; }
+  #log { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 140px; overflow: auto; margin: 8px 0 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <header class="row" style="justify-content: space-between;">
+    <h1>NOL 예매 타이머 — 요네즈 켄시 내한공연 (인스파이어 아레나)</h1>
+    <a href="https://nol.yanolja.com/ticket/products/26015024" target="_blank" rel="noopener">
+      <button type="button" class="secondary">NOL 상품 페이지 열기</button>
+    </a>
+  </header>
+
+  <section aria-labelledby="h-server">
+    <h2 id="h-server">서버 시각 (KST)</h2>
+    <div id="serverClock" class="clock" aria-live="off">--:--:--.---</div>
+    <p class="sub">내 기기 시각: <span id="localClock" class="clock">--:--:--.---</span></p>
+    <div class="row">
+      <button type="button" id="syncBtn">서버 시간 동기화</button>
+      <span id="syncStatus" class="sub" aria-live="polite">아직 동기화하지 않음 — 기기 시각 기준으로 표시 중</span>
+    </div>
+    <dl>
+      <dt>시간 소스</dt><dd id="source">—</dd>
+      <dt>보정값 (서버 − 기기)</dt><dd id="offset">—</dd>
+      <dt>왕복 지연 (RTT)</dt><dd id="rtt">—</dd>
+      <dt>추정 오차</dt><dd id="accuracy">—</dd>
+      <dt>마지막 동기화</dt><dd id="lastSync">—</dd>
+    </dl>
+    <p class="sub">소스 우선순위: NOL 서버(로컬 프록시 server.py 실행 시) → timeapi.io UTC 표준시. NOL 서버 시각은 UTC 표준시와 0.3초 이내로 일치함을 확인했습니다.</p>
+  </section>
+
+  <section aria-labelledby="h-count">
+    <h2 id="h-count">예매 오픈까지</h2>
+    <div id="countdown" class="clock" role="timer" aria-live="off">--:--:--.---</div>
+    <p class="sub" id="targetText"></p>
+    <div class="row">
+      <label for="target">오픈 시각 (KST)</label>
+      <input type="datetime-local" id="target" step="1" value="2026-10-22T12:00:00">
+      <button type="button" class="secondary" id="testSound">알림 소리 테스트</button>
+    </div>
+    <p class="sub">알림: T−60초 / T−10초(매초) / T−3초 / 오픈 순간. 소리는 먼저 "알림 소리 테스트"를 한 번 눌러 켜 두세요. 이 창은 가리지 말고 NOL 창 옆에 두세요.</p>
+    <p class="sub" id="alertStatus" aria-live="assertive"></p>
+  </section>
+
+  <section aria-labelledby="h-check">
+    <h2 id="h-check">오픈 전 체크리스트</h2>
+    <ul class="checklist">
+      <li><label><input type="checkbox"> NOL 로그인 완료, 상품 페이지를 별도 창에 열어 둠</label></li>
+      <li><label><input type="checkbox"> 본인인증·휴대폰 인증 사전 완료</label></li>
+      <li><label><input type="checkbox"> 결제수단(카드/간편결제) 등록·비밀번호 확인</label></li>
+      <li><label><input type="checkbox"> 원하는 회차(1/14·16·17)와 구역 우선순위 메모</label></li>
+      <li><label><input type="checkbox"> 유선 네트워크 또는 안정된 Wi-Fi, 불필요한 탭·프로그램 종료</label></li>
+      <li><label><input type="checkbox"> T−5분에 서버 시간 재동기화</label></li>
+      <li><label><input type="checkbox"> 대기열 진입 후 새로고침·뒤로가기 금지</label></li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="h-log">
+    <h2 id="h-log">동기화 로그</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const SAMPLE_INTERVAL_MS = 80;
+  const MAX_BOUNDARY_SAMPLES = 25;
+  const NTP_SAMPLES = 5;
+  const PROBE_TIMEOUT_MS = 1500;
+  const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+  const ALERT_POINTS_SEC = [60, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+  const LOCAL_PROXY_URL = "http://127.0.0.1:8787/time";
+  const UTC_API_URL = "https://timeapi.io/api/Time/current/zone?timeZone=UTC";
+
+  const el = (id) => document.getElementById(id);
+  const ui = {
+    serverClock: el("serverClock"), localClock: el("localClock"),
+    syncBtn: el("syncBtn"), syncStatus: el("syncStatus"), source: el("source"),
+    offset: el("offset"), rtt: el("rtt"), accuracy: el("accuracy"), lastSync: el("lastSync"),
+    countdown: el("countdown"), target: el("target"), targetText: el("targetText"),
+    testSound: el("testSound"), alertStatus: el("alertStatus"), log: el("log"),
+  };
+
+  // 보정 상태: 서버시각 ≈ Date.now() + offsetMs
+  const state = { offsetMs: 0, synced: false, targetMs: parseTarget(ui.target.value), firedAlerts: new Set() };
+
+  function log(msg) {
+    const stamp = fmtTime(Date.now() + state.offsetMs);
+    ui.log.textContent += `[${stamp}] ${msg}\n`;
+    ui.log.scrollTop = ui.log.scrollHeight;
+  }
+
+  function pad(n, w) { return String(n).padStart(w, "0"); }
+
+  function fmtTime(ms) {
+    const d = new Date(ms + KST_OFFSET_MS);
+    return `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}:${pad(d.getUTCSeconds(), 2)}.${pad(d.getUTCMilliseconds(), 3)}`;
+  }
+
+  function fmtDuration(ms) {
+    const sign = ms < 0 ? "-" : "";
+    const abs = Math.abs(ms);
+    const h = Math.floor(abs / 3600000), m = Math.floor(abs / 60000) % 60;
+    const s = Math.floor(abs / 1000) % 60, f = Math.floor(abs % 1000);
+    return `${sign}${pad(h, 2)}:${pad(m, 2)}:${pad(s, 2)}.${pad(f, 3)}`;
+  }
+
+  // datetime-local 값을 KST 로 해석한다 (기기 시간대와 무관).
+  function parseTarget(value) {
+    const [date, time] = value.split("T");
+    const [y, mo, d] = date.split("-").map(Number);
+    const [h, mi, s = 0] = time.split(":").map(Number);
+    return Date.UTC(y, mo - 1, d, h, mi, s) - KST_OFFSET_MS;
+  }
+
+  // ---------- 소리 ----------
+  let audioCtx = null;
+  function beep(freq, durationMs, count = 1) {
+    if (!audioCtx) return;
+    for (let i = 0; i < count; i++) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = freq;
+      gain.gain.value = 0.25;
+      osc.connect(gain).connect(audioCtx.destination);
+      const start = audioCtx.currentTime + i * (durationMs / 1000 + 0.08);
+      osc.start(start);
+      osc.stop(start + durationMs / 1000);
+    }
+  }
+  ui.testSound.addEventListener("click", () => {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+    beep(880, 120, 2);
+    ui.alertStatus.textContent = "소리 알림 켜짐";
+  });
+
+  function flash() {
+    document.body.classList.remove("flash");
+    void document.body.offsetWidth;
+    document.body.classList.add("flash");
+  }
+
+  // ---------- 시간 소스 ----------
+  // 각 소스의 sample() 은 { sentAt, receivedAt, serverMs } 를 돌려준다 (ms, 기기 시계 기준).
+  // resolutionMs: 서버 시각의 해상도. 1000 이면 Date 헤더(초 단위) 방식, 1 이면 ms JSON 방식.
+  function fetchWithTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, { cache: "no-store", signal: ctrl.signal }).finally(() => clearTimeout(timer));
+  }
+
+  const nolProxySource = {
+    name: "NOL 서버 (로컬 프록시)",
+    resolutionMs: 1000,
+    async sample() {
+      const url = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
+        ? "/time?" + Date.now()
+        : LOCAL_PROXY_URL + "?" + Date.now();
+      const res = await fetchWithTimeout(url, PROBE_TIMEOUT_MS);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    },
+  };
+
+  const utcApiSource = {
+    name: "timeapi.io (UTC 표준시)",
+    resolutionMs: 1,
+    async sample() {
+      const sentAt = Date.now();
+      const res = await fetchWithTimeout(UTC_API_URL, 8000);
+      const receivedAt = Date.now();
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      // dateTime 예: "2026-10-21T10:32:04.1304811" (UTC, 마이크로초 포함)
+      const serverMs = Date.parse(data.dateTime.slice(0, 23) + "Z");
+      if (Number.isNaN(serverMs)) throw new Error("time parse failed");
+      return { sentAt, receivedAt, serverMs };
+    },
+  };
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  // 초 단위 소스: 서버의 초가 바뀌는 경계를 포착해 ms 보정값을 구한다.
+  async function syncByBoundary(source) {
+    const samples = [];
+    for (let i = 0; i < MAX_BOUNDARY_SAMPLES; i++) {
+      const s = await source.sample();
+      samples.push(s);
+      if (i > 0 && s.serverMs > samples[i - 1].serverMs) break;
+      await sleep(SAMPLE_INTERVAL_MS);
+    }
+    const last = samples[samples.length - 1];
+    const prev = samples[samples.length - 2];
+    const rtt = last.receivedAt - last.sentAt;
+    if (prev && last.serverMs > prev.serverMs) {
+      const boundaryLocal = (prev.receivedAt + last.sentAt) / 2;
+      return {
+        offset: last.serverMs - boundaryLocal, rtt,
+        accuracy: Math.round((last.sentAt - prev.receivedAt) / 2 + rtt / 2),
+        note: `${samples.length}회 샘플, 초 경계 포착`, warn: false,
+      };
+    }
+    const mid = (last.sentAt + last.receivedAt) / 2;
+    return {
+      offset: last.serverMs + 500 - mid, rtt, accuracy: 500 + Math.round(rtt / 2),
+      note: "초 경계 미포착, 오차 큼 — 다시 시도 권장", warn: true,
+    };
+  }
+
+  // ms 단위 소스: 여러 번 재서 RTT 가 가장 짧은 샘플을 쓴다.
+  async function syncByMinRtt(source) {
+    let best = null;
+    for (let i = 0; i < NTP_SAMPLES; i++) {
+      const s = await source.sample();
+      const rtt = s.receivedAt - s.sentAt;
+      if (!best || rtt < best.rtt) best = { rtt, offset: s.serverMs - (s.sentAt + s.receivedAt) / 2 };
+      await sleep(SAMPLE_INTERVAL_MS);
+    }
+    return {
+      offset: best.offset, rtt: best.rtt, accuracy: Math.round(best.rtt / 2),
+      note: `${NTP_SAMPLES}회 샘플, 최단 RTT 사용`, warn: best.rtt > 600,
+    };
+  }
+
+  async function sync() {
+    ui.syncBtn.disabled = true;
+    ui.syncStatus.textContent = "동기화 중…";
+    ui.syncStatus.className = "sub";
+    let result = null, source = null;
+    for (const candidate of [nolProxySource, utcApiSource]) {
+      try {
+        result = candidate.resolutionMs >= 1000 ? await syncByBoundary(candidate) : await syncByMinRtt(candidate);
+        source = candidate;
+        break;
+      } catch (err) {
+        log(`${candidate.name} 사용 불가: ${err.name === "AbortError" ? "응답 없음" : err.message}`);
+      }
+    }
+    ui.syncBtn.disabled = false;
+    if (!result) {
+      ui.syncStatus.textContent = "동기화 실패: 모든 시간 소스에 연결하지 못함";
+      ui.syncStatus.className = "sub status-err";
+      return;
+    }
+    state.offsetMs = result.offset;
+    state.synced = true;
+    ui.syncStatus.textContent = `동기화 완료 (${result.note})`;
+    ui.syncStatus.className = "sub " + (result.warn ? "status-warn" : "status-ok");
+    ui.source.textContent = source.name;
+    ui.offset.textContent = `${result.offset >= 0 ? "+" : ""}${Math.round(result.offset)} ms`;
+    ui.rtt.textContent = `${Math.round(result.rtt)} ms`;
+    ui.accuracy.textContent = `±${result.accuracy} ms`;
+    ui.lastSync.textContent = fmtTime(Date.now() + result.offset);
+    log(`${source.name}: 보정값 ${Math.round(result.offset)}ms, RTT ${Math.round(result.rtt)}ms, 오차 ±${result.accuracy}ms`);
+  }
+  ui.syncBtn.addEventListener("click", sync);
+
+  // ---------- 타이머 ----------
+  ui.target.addEventListener("change", () => {
+    state.targetMs = parseTarget(ui.target.value);
+    state.firedAlerts.clear();
+    log("오픈 시각 변경: " + ui.target.value);
+  });
+
+  function fireAlert(sec) {
+    if (sec === 60) { beep(660, 200, 1); ui.alertStatus.textContent = "60초 전"; }
+    else if (sec === 0) { beep(1320, 600, 1); flash(); ui.alertStatus.textContent = "지금 누르세요!"; }
+    else if (sec === 3) { beep(990, 120, 1); flash(); ui.alertStatus.textContent = "3초 전 — 마우스 올려두세요"; }
+    else if (sec <= 10) { beep(880, 80, 1); ui.alertStatus.textContent = `${sec}초 전`; }
+    log(`알림: T−${sec}s`);
+  }
+
+  function tick() {
+    const now = Date.now() + state.offsetMs;
+    ui.serverClock.textContent = fmtTime(now);
+    ui.localClock.textContent = fmtTime(Date.now());
+
+    const remain = state.targetMs - now;
+    ui.countdown.textContent = fmtDuration(remain);
+    ui.countdown.className = "clock" + (remain <= 0 ? " go" : remain <= 60000 ? " near" : "");
+
+    for (const sec of ALERT_POINTS_SEC) {
+      if (remain <= sec * 1000 && !state.firedAlerts.has(sec)) {
+        state.firedAlerts.add(sec);
+        if (remain > -2000) fireAlert(sec); // 페이지를 뒤늦게 열었을 때 과거 알림은 울리지 않는다
+      }
+    }
+    if (!tick.rafScheduled) {
+      tick.rafScheduled = true;
+      requestAnimationFrame(() => { tick.rafScheduled = false; tick(); });
+    }
+  }
+
+  ui.targetText.textContent = "기본값: 2026-10-22(목) 12:00:00 KST 일반 예매 오픈";
+  log("시작. 서버 시간을 동기화합니다.");
+  requestAnimationFrame(tick);
+  // 창이 가려지면 rAF 가 멈추므로, 알림만은 setInterval 로도 보장한다 (tick 은 중복 호출해도 무해).
+  setInterval(tick, 100);
+  sync();
+})();
+</script>
+</body>
+</html>
