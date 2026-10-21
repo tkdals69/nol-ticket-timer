@@ -58,6 +58,16 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_OPTIONS(self):
+        # https 로 호스팅된 페이지가 로컬(127.0.0.1)로 요청하면 Chrome 이 Private Network Access
+        # 프리플라이트를 먼저 보낸다. 허용 헤더를 돌려주지 않으면 fetch 가 즉시 실패한다.
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.end_headers()
+
     def _handle_time(self):
         try:
             payload = fetch_server_time()
@@ -70,6 +80,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         # 외부에 게시한 타이머 페이지가 이 로컬 프록시를 쓸 수 있도록 허용한다.
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
